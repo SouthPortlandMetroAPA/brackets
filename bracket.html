@@ -304,7 +304,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.5';
+const APP_VERSION = '0.6';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
@@ -656,14 +656,31 @@ function onSearch() {
     return aPast ? -1 : 1;                         // past beats future
   });
   searchResults = all;
-  searchIdx = 0;
-  if (all.length) navigate(0);
-  else { clearHighlights(); updateSearchUI(); }
+  // -1 sentinel = "no result is current yet". The first call to navigate()
+  // resolves it to 0 (or last when going backwards). This way the first
+  // press of Enter / Next lands on hit #1 instead of skipping it.
+  searchIdx = -1;
+  // While the user is *typing*, don't scroll the page — that snatches the
+  // search bar away from underneath their finger on mobile (especially
+  // with the keyboard open and `scrollIntoView({block:'center'})` moving
+  // the viewport vertically). Just highlight matches in the active tab
+  // and update the prev/next counter. The user explicitly navigates
+  // (Enter or the arrow buttons) when they're ready to be panned to a hit.
+  if (all.length) {
+    applyHighlights();
+  } else {
+    clearHighlights();
+  }
+  updateSearchUI();
 }
 
 function navigate(deltaOrZero) {
   if (!searchResults.length) return;
-  if (deltaOrZero !== 0) {
+  if (searchIdx === -1) {
+    // First navigation after a new search: land on hit #1 (or the last
+    // hit if the user went backwards before forward).
+    searchIdx = deltaOrZero < 0 ? searchResults.length - 1 : 0;
+  } else if (deltaOrZero !== 0) {
     searchIdx = (searchIdx + deltaOrZero + searchResults.length) % searchResults.length;
   }
   const r = searchResults[searchIdx];
@@ -710,6 +727,13 @@ function updateSearchUI() {
   $('nextBtn').disabled = !has;
   if (!has) {
     $('searchMeta').textContent = $('q').value ? 'No matches' : '';
+    return;
+  }
+  // Before the user explicitly navigates (searchIdx === -1), show the
+  // total count without pinning a position — clearer that they're in
+  // "results listed, none selected yet" state.
+  if (searchIdx === -1) {
+    $('searchMeta').textContent = `${searchResults.length} match${searchResults.length === 1 ? '' : 'es'}`;
     return;
   }
   const r = searchResults[searchIdx];

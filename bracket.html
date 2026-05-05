@@ -287,7 +287,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.2';
+const APP_VERSION = '0.3';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
@@ -405,7 +405,33 @@ async function fetchAndExtract(pageUrl) {
   const html = await r.text();
   const tableMatch = html.match(/<table\s+class="waffle[\s\S]*?<\/table>/);
   const styleMatch = html.match(/<style[^>]*>([^<]*\.ritz[\s\S]*?)<\/style>/);
-  return { table: tableMatch ? tableMatch[0] : '', style: styleMatch ? styleMatch[1] : '' };
+  return {
+    table: tableMatch ? tableMatch[0] : '',
+    style: styleMatch ? filterToRitzRules(styleMatch[1]) : ''
+  };
+}
+
+/* Google's published <style> block also defines `html`, `body`,
+ * `#sheets-viewport`, `#top-bar`, `#footer`, etc. — chrome rules meant for
+ * Google's own iframe wrapper. Letting those into our page silently
+ * overrides body display/overflow and breaks the bracket layout (which is
+ * how Wichita's "body { display: flex }" was distorting Midway when
+ * switched back). Keep only rules whose selectors start with `.ritz` or
+ * `.waffle` — those are the actual table cell styles we want. */
+function filterToRitzRules(css) {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(css))) {
+    const sel = m[1].replace(/\s+/g, ' ').trim();
+    if (!sel) continue;
+    const parts = sel.split(',').map(s => s.trim()).filter(Boolean);
+    const allOk = parts.length && parts.every(p =>
+      p.startsWith('.ritz') || p.startsWith('.waffle')
+    );
+    if (allOk) out.push(sel + ' { ' + m[2].trim() + ' }');
+  }
+  return out.join('\n');
 }
 
 async function hashStr(s) {
@@ -435,7 +461,14 @@ function renderTabBar() {
 function renderActiveBracket() {
   const tab = tabs[activeTabIdx];
   if (!tab) return;
-  // Inject style block once per tab (gid-keyed)
+  // Each Google sheet tab uses generic class names like .s0, .s1, .s2
+  // that mean DIFFERENT things across tabs. Leaving a previous tab's
+  // CSS in place causes the wrong rules to apply when switching back
+  // (gray/white cell backgrounds drift, borders disappear). Always
+  // ensure only the active tab's CSS is in the document.
+  document.querySelectorAll('style[id^="css-"]').forEach(s => {
+    if (s.id !== 'css-' + tab.gid) s.remove();
+  });
   if (tab.styleCss && !document.getElementById('css-' + tab.gid)) {
     const s = document.createElement('style');
     s.id = 'css-' + tab.gid;

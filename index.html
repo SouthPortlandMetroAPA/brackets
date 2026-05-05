@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<!--
+  Brackets — landing page
+  ============================================================================
+  Public list of tournaments. Polls every 30 s for new/updated entries from
+  Supabase. Tournaments are grouped: Live now → Upcoming → Past, sorted by
+  date. Tapping a tournament opens bracket.html?t=<id>.
+
+  Backend: spm-apa Supabase, schema 'bracket', table 'tournaments'.
+  Auth:    anon key (public read).
+  ============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPM APA Brackets</title>
+<style>
+  :root {
+    /* SPM brand */
+    --spm-primary: #ea002a;
+    --spm-accent:  #0031a1;
+    --primary: var(--spm-primary);
+    --accent:  var(--spm-accent);
+    /* Tournament flair */
+    --gold:     #d4a017;
+    --gold-light: #ffd54f;
+    --gold-deep: #8a6800;
+    /* Surfaces */
+    --bg:      #f5f5f5;
+    --surface: #ffffff;
+    --text:    #1f1f1f;
+    --muted:   #666;
+    --border:  #e1e1e1;
+    --live:    #0a8754;
+    --live-bg: #d4edda;
+    --shadow-1: 0 3px 10px rgba(0,0,0,.10);
+    --shadow-2: 0 6px 22px rgba(0,0,0,.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    font-size: 16px;
+    min-height: 100vh;
+  }
+  header {
+    margin: 16px 16px 24px;
+    border-radius: 22px;
+    background:
+      radial-gradient(ellipse at top right, rgba(212,160,23,0.25), transparent 55%),
+      linear-gradient(135deg, var(--spm-primary) 0%, var(--spm-accent) 100%);
+    color: white;
+    padding: 28px 24px 26px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.22);
+    position: relative;
+    overflow: hidden;
+  }
+  header::before {
+    /* Subtle "bracket lines" decorative pattern */
+    content: '';
+    position: absolute;
+    top: 0; right: -20px; width: 220px; bottom: 0;
+    background-image:
+      linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px),
+      linear-gradient(0deg,  rgba(255,255,255,0.06) 1px, transparent 1px);
+    background-size: 28px 28px;
+    pointer-events: none;
+    mask-image: linear-gradient(90deg, transparent, black 60%);
+    -webkit-mask-image: linear-gradient(90deg, transparent, black 60%);
+  }
+  header .wrap { max-width: 720px; margin: 0 auto; position: relative; z-index: 1; }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: clamp(1.5rem, 1.1rem + 2.2vw, 2.25rem);
+    font-weight: 900;
+    letter-spacing: -0.02em;
+  }
+  header .tagline {
+    margin: 0;
+    color: rgba(255,255,255,0.92);
+    font-size: clamp(0.95rem, 0.85rem + 0.4vw, 1.125rem);
+    font-style: italic;
+    font-weight: 500;
+  }
+  header .badge {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 3px 10px;
+    background: var(--gold);
+    color: #1a1100;
+    font-size: 0.6875rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-radius: 999px;
+    box-shadow: 0 2px 6px rgba(212,160,23,0.45);
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+
+  .group-title {
+    font-size: 0.8125rem;
+    font-weight: 800;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin: 28px 0 10px;
+    padding: 0 4px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .group-title:first-child { margin-top: 0; }
+  .group-title.is-live {
+    color: var(--gold-deep);
+  }
+  .live-pulse {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 0 0 rgba(212,160,23,0.6);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(212,160,23,0.55); transform: scale(1); }
+    70%  { box-shadow: 0 0 0 12px rgba(212,160,23,0);  transform: scale(1.05); }
+    100% { box-shadow: 0 0 0 0 rgba(212,160,23,0);     transform: scale(1); }
+  }
+
+  .tcard {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow-1);
+    text-decoration: none; color: inherit;
+    display: flex; gap: 16px; align-items: center; justify-content: space-between;
+    transition: transform 140ms cubic-bezier(.2,.8,.2,1), box-shadow 140ms;
+    min-height: 64px;
+    position: relative;
+    overflow: hidden;
+  }
+  .tcard:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
+  .tcard:active { transform: translateY(0); }
+  .tcard.live {
+    border-color: var(--gold);
+    background:
+      radial-gradient(ellipse at top right, rgba(212,160,23,0.18), transparent 60%),
+      linear-gradient(180deg, #fff9eb 0%, white 70%);
+    box-shadow: 0 4px 16px rgba(212,160,23,0.20), 0 1px 3px rgba(0,0,0,.08);
+  }
+  .tcard.live::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; bottom: 0; width: 5px;
+    background: linear-gradient(180deg, var(--gold-light), var(--gold));
+  }
+  .tcard.disabled {
+    opacity: 0.65; pointer-events: none;
+    cursor: not-allowed;
+    background: var(--bg);
+  }
+  .tcard .info { flex: 1; min-width: 0; }
+  .tcard .name {
+    font-size: clamp(1rem, 0.95rem + 0.3vw, 1.125rem);
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 4px;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+  .tcard .dates {
+    font-size: 0.9375rem;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .tcard .status-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    flex-shrink: 0;
+  }
+  .tcard .status-pill.live {
+    background: linear-gradient(135deg, var(--gold-light), var(--gold));
+    color: #1a1100;
+    box-shadow: 0 2px 6px rgba(212,160,23,0.45);
+  }
+  .tcard .status-pill.upcoming { background: #e6efff; color: var(--accent); }
+  .tcard .status-pill.past { background: #ececec; color: #555; }
+  .tcard .arrow {
+    color: var(--muted);
+    font-size: 1.25rem;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+  .tcard.disabled .arrow { display: none; }
+  .tcard .nourl-note {
+    font-size: 0.8125rem; color: var(--muted); font-style: italic;
+    margin-top: 4px;
+  }
+
+  #status {
+    text-align: center;
+    color: var(--muted);
+    padding: 32px 20px;
+    font-size: 0.9375rem;
+  }
+  #status.error { color: var(--primary); }
+  .empty {
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--muted);
+  }
+  .empty h2 { margin: 0 0 8px; color: var(--text); font-size: 1.25rem; }
+  .past-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 8px 16px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin: 16px auto 0;
+    display: block;
+  }
+  .past-toggle:hover { background: var(--surface); }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    padding: 24px 20px;
+  }
+  .updated-toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: white;
+    padding: 10px 18px; border-radius: 999px;
+    font-size: 0.875rem; font-weight: 600;
+    box-shadow: var(--shadow-2);
+    opacity: 0; pointer-events: none;
+    transition: opacity 200ms;
+    z-index: 50;
+  }
+  .updated-toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>Tournament Brackets</h1>
+    <p class="tagline">South Portland Metro APA</p>
+    <span class="badge">Live results · Updated automatically</span>
+  </div>
+</header>
+
+<main>
+  <div id="status">Loading tournaments…</div>
+  <div id="content" hidden></div>
+</main>
+
+<footer id="footer" hidden>
+  Updated <span id="lastUpdated"></span> · auto-refreshes every 30 s
+</footer>
+
+<div class="updated-toast" id="updatedToast">List updated</div>
+
+<script>
+const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
+const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
+const POLL_MS = 30000;
+
+const $ = (id) => document.getElementById(id);
+
+function fmtDateRange(start, end) {
+  if (!start) return '';
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = (end || start).split('-').map(Number);
+  const startUTC = new Date(Date.UTC(sy, sm-1, sd));
+  const endUTC   = new Date(Date.UTC(ey, em-1, ed));
+  const thisYear = new Date().getUTCFullYear();
+  const sameYear  = sy === ey;
+  const sameMonth = sameYear && sm === em;
+  const startOpts = { month: 'short', day: 'numeric', timeZone: 'UTC' };
+  const endOpts   = sameMonth
+    ? { day: 'numeric', timeZone: 'UTC' }
+    : { month: 'short', day: 'numeric', timeZone: 'UTC' };
+  let s = startUTC.toLocaleDateString(undefined, startOpts);
+  if (start === end) {
+    return ey === thisYear ? s : `${s}, ${ey}`;
+  }
+  const e = endUTC.toLocaleDateString(undefined, endOpts);
+  if (sameYear) {
+    return ey === thisYear ? `${s}–${e}` : `${s}–${e}, ${ey}`;
+  }
+  return `${s}, ${sy} – ${e}, ${ey}`;
+}
+
+function status(t /* tournament */, today /* yyyy-mm-dd */) {
+  if (today >= t.start_date && today <= t.end_date) return 'live';
+  if (today < t.start_date) return 'upcoming';
+  return 'past';
+}
+
+function escapeHTML(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function isoToday() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+let lastSnapshot = '';
+let pastExpanded = false;
+
+function render(list) {
+  const today = isoToday();
+  const annotated = list.map(t => ({ ...t, _status: status(t, today) }));
+  const live     = annotated.filter(t => t._status === 'live');
+  const upcoming = annotated.filter(t => t._status === 'upcoming');
+  const past     = annotated.filter(t => t._status === 'past');
+
+  // Live first (chronological), upcoming next (chronological), past last (reverse chrono)
+  live.sort((a,b)     => a.start_date.localeCompare(b.start_date));
+  upcoming.sort((a,b) => a.start_date.localeCompare(b.start_date));
+  past.sort((a,b)     => b.start_date.localeCompare(a.start_date));
+
+  if (annotated.length === 0) {
+    $('content').innerHTML = `<div class="empty"><h2>No tournaments yet</h2><p>Check back soon — the admin will add them as they're scheduled.</p></div>`;
+    return;
+  }
+
+  const sections = [];
+  if (live.length) {
+    sections.push(`<div class="group-title is-live"><span class="live-pulse"></span>Live now</div>` +
+      live.map(t => card(t)).join(''));
+  }
+  if (upcoming.length) {
+    sections.push(`<div class="group-title">Upcoming</div>` +
+      upcoming.map(t => card(t)).join(''));
+  }
+  if (past.length) {
+    sections.push(`<div class="group-title">Past</div>` +
+      past.slice(0, pastExpanded ? past.length : 3).map(t => card(t)).join(''));
+    if (past.length > 3) {
+      sections.push(`<button class="past-toggle" id="pastToggle">${
+        pastExpanded ? 'Hide ' + (past.length - 3) + ' older' : 'Show ' + (past.length - 3) + ' older'
+      }</button>`);
+    }
+  }
+  $('content').innerHTML = sections.join('');
+  const tog = $('pastToggle');
+  if (tog) tog.addEventListener('click', () => { pastExpanded = !pastExpanded; render(list); });
+}
+
+function card(t) {
+  const dates = fmtDateRange(t.start_date, t.end_date);
+  const hasUrl = !!t.workbook_pub_url;
+  const cls = `tcard ${t._status === 'live' ? 'live' : ''} ${!hasUrl ? 'disabled' : ''}`;
+  const pillClass = t._status; // live | upcoming | past
+  const pillText  = t._status === 'live' ? 'Live now' : (t._status === 'upcoming' ? 'Upcoming' : 'Past');
+  const inner = `
+    <div class="info">
+      <div class="name">${escapeHTML(t.name)}</div>
+      <div class="dates">${escapeHTML(dates)}</div>
+      ${!hasUrl ? '<div class="nourl-note">Bracket not yet published</div>' : ''}
+    </div>
+    <span class="status-pill ${pillClass}">${pillText}</span>
+    <span class="arrow" aria-hidden="true">›</span>
+  `;
+  if (!hasUrl) return `<div class="${cls}" aria-disabled="true">${inner}</div>`;
+  return `<a class="${cls}" href="bracket.html?t=${t.id}">${inner}</a>`;
+}
+
+async function fetchTournaments() {
+  const url = SB_URL + '/rest/v1/tournaments?select=id,name,start_date,end_date,workbook_pub_url,display_order,updated_at&order=display_order.asc,start_date.asc';
+  const r = await fetch(url, { headers: HEADERS });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
+}
+
+async function tick() {
+  try {
+    const list = await fetchTournaments();
+    const snap = JSON.stringify(list);
+    if (snap !== lastSnapshot) {
+      const isFirst = lastSnapshot === '';
+      lastSnapshot = snap;
+      render(list);
+      if (!isFirst) {
+        const t = $('updatedToast');
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), 2400);
+      }
+      $('status').hidden = true;
+      $('content').hidden = false;
+      $('footer').hidden = false;
+    }
+    $('lastUpdated').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    if (lastSnapshot === '') {
+      $('status').className = 'error';
+      $('status').textContent = 'Could not load tournaments: ' + e.message;
+    }
+    // Silent on subsequent failures — UI keeps showing last good data
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  tick();
+  setInterval(tick, POLL_MS);
+});
+</script>
+</body>
+</html>

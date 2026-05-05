@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<!--
+  Brackets — bracket viewer
+  ============================================================================
+  Loads a single tournament (?t=<id>) and renders every "...Bracket" tab from
+  its published Google Sheet workbook. User picks a location via a horizontal
+  tab bar at the top. Search bar finds teams across all loaded brackets,
+  prioritized by latest match (column = day/time slot).
+
+  Pinch-zoom is supported because the page itself flows wider than the
+  viewport — the browser handles native zoom/pan without any inner overflow
+  containers intercepting touch gestures.
+
+  Polls every 30 s and soft-replaces the table HTML when content hashes
+  change. User's scroll/zoom/active-tab/search-state is preserved.
+  ============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=0.1, maximum-scale=4, user-scalable=yes">
+<title>Bracket Viewer</title>
+<style>
+  :root {
+    --spm-primary: #ea002a;
+    --spm-accent:  #0031a1;
+    --primary: var(--spm-primary);
+    --accent:  var(--spm-accent);
+    --gold:     #d4a017;
+    --gold-light: #ffd54f;
+    --bg:      #f5f5f5;
+    --surface: #ffffff;
+    --text:    #1f1f1f;
+    --muted:   #666;
+    --border:  #e1e1e1;
+    --live:    #0a8754;
+    --shadow-1: 0 3px 10px rgba(0,0,0,.10);
+    --shadow-2: 0 6px 22px rgba(0,0,0,.16);
+    --hit:     #fff3a0;
+    --hit-current: var(--gold-light);
+    --hit-current-border: var(--gold);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.5;
+    font-size: 16px;
+    /* Allow body to be wider than viewport for natural horizontal scroll */
+    min-width: 100vw;
+  }
+
+  /* ───── Fixed top chrome (header + tabs + search) ───── */
+  .chrome {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    background: var(--surface);
+    box-shadow: var(--shadow-1);
+  }
+  .app-bar {
+    background:
+      radial-gradient(ellipse at top right, rgba(212,160,23,0.22), transparent 55%),
+      linear-gradient(135deg, var(--spm-primary), var(--spm-accent));
+    color: white;
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 12px;
+    font-size: 0.9375rem;
+    min-height: 48px;
+    position: relative;
+  }
+  .app-bar a.back {
+    color: white; text-decoration: none; font-weight: 700;
+    padding: 6px 10px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 4px;
+    min-height: 36px;
+    margin-left: -4px;
+    background: rgba(255,255,255,0.10);
+  }
+  .app-bar a.back:hover { background: rgba(255,255,255,0.22); }
+  .app-bar .name {
+    flex: 1; min-width: 0;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .app-bar .meta {
+    font-size: 0.8125rem;
+    color: var(--gold-light);
+    font-style: italic;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .tab-bar {
+    background: var(--surface);
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    padding: 8px 8px 8px 12px;
+    scrollbar-width: thin;
+  }
+  .tab-bar::-webkit-scrollbar { height: 4px; }
+  .tab-bar::-webkit-scrollbar-thumb { background: var(--border); }
+  .tab {
+    display: inline-flex; align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 8px 16px;
+    margin-right: 6px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.875rem; font-weight: 600;
+    min-height: 36px;
+    white-space: nowrap;
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  .tab:hover { background: white; border-color: var(--accent); }
+  .tab.active {
+    background: linear-gradient(135deg, var(--spm-primary), var(--spm-accent));
+    color: white;
+    border-color: transparent;
+    box-shadow: 0 2px 8px rgba(0,49,161,0.30);
+  }
+
+  .search-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .search-row input {
+    flex: 1;
+    font: inherit;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-height: 44px;
+    color: var(--text);
+    background: var(--surface);
+  }
+  .search-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0,49,161,0.15);
+  }
+  .search-row .nav-btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 0 12px;
+    min-height: 44px; min-width: 44px;
+    cursor: pointer;
+    font: inherit; font-weight: 700;
+    font-size: 1.125rem;
+  }
+  .search-row .nav-btn:hover:not(:disabled) { background: var(--bg); border-color: var(--accent); }
+  .search-row .nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .search-row .meta {
+    font-size: 0.8125rem;
+    color: var(--muted);
+    min-width: 60px;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  /* ───── Main content ───── */
+  main {
+    /* Push below fixed chrome — header (~48) + tabs (~52) + search (~60) */
+    padding-top: 164px;
+    padding-bottom: 24px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  /* The waffle/ritz table styles are injected at runtime from Google's HTML.
+     We add minimal scaffolding here that doesn't conflict. */
+  .ritz {
+    display: inline-block;
+    min-width: 100%;
+  }
+  .ritz .waffle { border-collapse: collapse; }
+  .ritz .waffle td, .ritz .waffle th { padding: 0 3px; vertical-align: bottom; }
+  .ritz .waffle .row-headers-background {
+    background: #f0f0f0; color: #999; padding: 0 5px;
+    font-size: 0.7rem; text-align: right;
+  }
+
+  /* Search highlights */
+  .ritz .waffle td.search-hit,
+  .ritz .waffle td.search-hit-current {
+    transition: background-color 200ms, box-shadow 200ms;
+  }
+  .ritz .waffle td.search-hit { background-color: var(--hit) !important; }
+  .ritz .waffle td.search-hit-current {
+    background-color: var(--hit-current) !important;
+    box-shadow: 0 0 0 3px var(--hit-current-border);
+    position: relative;
+    z-index: 5;
+  }
+
+  /* Status / errors */
+  #status {
+    text-align: center;
+    padding: 32px 20px;
+    color: var(--muted);
+  }
+  #status.error { color: var(--primary); font-weight: 600; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: white;
+    padding: 10px 18px; border-radius: 999px;
+    font-size: 0.875rem; font-weight: 600;
+    box-shadow: var(--shadow-2);
+    opacity: 0; pointer-events: none;
+    transition: opacity 200ms;
+    z-index: 200;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="app-bar">
+    <a class="back" href="index.html" aria-label="Back to tournaments">← Back</a>
+    <span class="name" id="t-name">Loading…</span>
+    <span class="meta" id="t-meta"></span>
+  </div>
+  <div class="tab-bar" id="tab-bar"></div>
+  <div class="search-row">
+    <input id="q" type="search" placeholder="Search team # or name (any bracket)…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button class="nav-btn" id="prevBtn" disabled aria-label="Previous match">↑</button>
+    <button class="nav-btn" id="nextBtn" disabled aria-label="Next match">↓</button>
+    <span class="meta" id="searchMeta"></span>
+  </div>
+</div>
+
+<main>
+  <div id="status">Loading bracket…</div>
+  <div id="bracket"></div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
+const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
+const POLL_MS = 30000;
+
+const TEAM_RX = /\b\d{3,5}\s*-\s*[A-Za-z]/; // permissive: also matches inside cells like "8104 - The Scratch Pack"
+const TIME_RX = /^\s*(Saturday|Sunday|Friday|Monday|Tuesday|Wednesday|Thursday)\s+\d{1,2}(:\d{2})?\s*(am|pm)?/i;
+const DAY_OFFSETS = { friday:-1, saturday:0, sunday:1, monday:2, tuesday:3, wednesday:4, thursday:5 };
+
+const params = new URLSearchParams(location.search);
+const tournamentId = parseInt(params.get('t'), 10);
+
+const $ = (id) => document.getElementById(id);
+const escapeHTML = (s) => (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let tournament = null;
+let tabs = [];           // { name, gid, pageUrl, tableHtml, styleCss, tableHash, searchIndex, timeSlots }
+let activeTabIdx = 0;
+let searchResults = [];  // [{ tabIdx, ri, ci, text, slotMs }]
+let searchIdx = 0;       // current result index
+
+// ───────────────────────────────────────── boot
+async function init() {
+  if (!Number.isFinite(tournamentId)) { fail('Invalid tournament URL.'); return; }
+
+  try {
+    tournament = await fetchTournament();
+  } catch (e) { fail('Could not load tournament: ' + e.message); return; }
+
+  document.title = tournament.name + ' — Brackets';
+  $('t-name').textContent = tournament.name;
+  $('t-meta').textContent = fmtDateRange(tournament.start_date, tournament.end_date);
+
+  if (!tournament.workbook_pub_url) {
+    fail('This tournament has no published bracket yet.');
+    return;
+  }
+
+  let allTabs;
+  try {
+    allTabs = await fetchWorkbookTabs(tournament.workbook_pub_url);
+  } catch (e) { fail('Could not load the published workbook: ' + e.message); return; }
+
+  // Filter to "...Bracket" tabs (case-insensitive). If none match, fall back to all tabs.
+  const matched = allTabs.filter(t => /bracket\s*$/i.test(t.name));
+  tabs = (matched.length ? matched : allTabs).map(t => ({ ...t }));
+
+  if (!tabs.length) { fail('No tabs found in the published workbook.'); return; }
+
+  // Fetch all brackets in parallel
+  await Promise.all(tabs.map(async (t) => {
+    try {
+      const data = await fetchAndExtract(t.pageUrl);
+      t.tableHtml = data.table;
+      t.styleCss = data.style;
+      t.tableHash = await hashStr(data.table);
+    } catch (e) {
+      t.tableHtml = '';
+      t.styleCss = '';
+      t.tableHash = '';
+      console.warn('Tab failed:', t.name, e);
+    }
+  }));
+
+  renderTabBar();
+  renderActiveBracket();
+
+  // Cross-tab search index
+  buildAllSearchIndices();
+
+  wireSearch();
+  wireKeyboard();
+
+  $('status').hidden = true;
+
+  setInterval(pollForChanges, POLL_MS);
+}
+
+function fail(msg) {
+  $('status').className = 'error';
+  $('status').textContent = msg;
+  $('bracket').innerHTML = '';
+}
+
+// ───────────────────────────────────────── data fetching
+async function fetchTournament() {
+  const r = await fetch(SB_URL + '/rest/v1/tournaments?id=eq.' + tournamentId + '&select=*', { headers: HEADERS });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const arr = await r.json();
+  if (!arr.length) throw new Error('Tournament not found');
+  return arr[0];
+}
+
+async function fetchWorkbookTabs(workbookUrl) {
+  const r = await fetch(workbookUrl, { credentials: 'omit' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const html = await r.text();
+  // Google's workbook HTML embeds tab metadata via items.push({...}) calls.
+  const re = /items\.push\(\{name:\s*"((?:[^"\\]|\\.)*)",\s*pageUrl:\s*"((?:[^"\\]|\\.)*)",\s*gid:\s*"([^"]+)"/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(html))) {
+    out.push({
+      name: m[1].replace(/\\(.)/g, '$1'),
+      pageUrl: m[2].replace(/\\(.)/g, '$1'),
+      gid: m[3],
+    });
+  }
+  return out;
+}
+
+async function fetchAndExtract(pageUrl) {
+  const r = await fetch(pageUrl, { credentials: 'omit' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const html = await r.text();
+  const tableMatch = html.match(/<table\s+class="waffle[\s\S]*?<\/table>/);
+  const styleMatch = html.match(/<style[^>]*>([^<]*\.ritz[\s\S]*?)<\/style>/);
+  return { table: tableMatch ? tableMatch[0] : '', style: styleMatch ? styleMatch[1] : '' };
+}
+
+async function hashStr(s) {
+  if (!s) return '';
+  const buf = new TextEncoder().encode(s);
+  const digest = await crypto.subtle.digest('SHA-1', buf);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// ───────────────────────────────────────── render
+function renderTabBar() {
+  const el = $('tab-bar');
+  el.innerHTML = tabs.map((t, i) => `<button class="tab ${i===activeTabIdx?'active':''}" data-idx="${i}">${escapeHTML(t.name)}</button>`).join('');
+  el.onclick = (e) => {
+    const b = e.target.closest('.tab');
+    if (!b) return;
+    const idx = +b.dataset.idx;
+    if (idx === activeTabIdx) return;
+    activeTabIdx = idx;
+    renderTabBar();
+    renderActiveBracket();
+    // Re-apply search highlights for new tab
+    if (searchResults.length) applyHighlights();
+  };
+}
+
+function renderActiveBracket() {
+  const tab = tabs[activeTabIdx];
+  if (!tab) return;
+  // Inject style block once per tab (gid-keyed)
+  if (tab.styleCss && !document.getElementById('css-' + tab.gid)) {
+    const s = document.createElement('style');
+    s.id = 'css-' + tab.gid;
+    s.textContent = tab.styleCss;
+    document.head.appendChild(s);
+  }
+  const wrap = $('bracket');
+  if (!tab.tableHtml) {
+    wrap.innerHTML = `<div style="padding:24px;color:#888;text-align:center">No bracket data for this tab.</div>`;
+    return;
+  }
+  wrap.innerHTML = '<div class="ritz">' + tab.tableHtml + '</div>';
+}
+
+// ───────────────────────────────────────── grid + indices
+function buildGrid(rootEl) {
+  const grid = [];
+  if (!rootEl) return grid;
+  const trs = rootEl.querySelectorAll('table.waffle > tbody > tr');
+  trs.forEach(tr => {
+    const cells = [];
+    tr.querySelectorAll(':scope > th, :scope > td').forEach(c => cells.push(c));
+    grid.push(cells);
+  });
+  return grid;
+}
+
+function detectTimeSlots(grid) {
+  const slots = [];
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < grid[r].length; c++) {
+      const text = grid[r][c].textContent.replace(/\s+/g, ' ').trim();
+      if (TIME_RX.test(text)) slots.push({ r, c, label: text });
+    }
+  }
+  return slots;
+}
+
+function timeSlotForCell(slots, r, c) {
+  let best = null;
+  for (const s of slots) {
+    if (s.c === c && s.r < r) {
+      if (!best || s.r > best.r) best = s;
+    }
+  }
+  return best ? best.label : null;
+}
+
+function slotToMillis(label, startDateISO) {
+  // label like "Saturday 1:30pm" + tournament start_date → epoch ms
+  if (!label || !startDateISO) return null;
+  const m = label.match(/^\s*(Saturday|Sunday|Friday|Monday|Tuesday|Wednesday|Thursday)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!m) return null;
+  const day = m[1].toLowerCase();
+  let hr = parseInt(m[2], 10);
+  const mn = m[3] ? parseInt(m[3], 10) : 0;
+  const ampm = (m[4] || '').toLowerCase();
+  if (ampm === 'pm' && hr < 12) hr += 12;
+  if (ampm === 'am' && hr === 12) hr = 0;
+  const offset = DAY_OFFSETS[day] ?? 0;
+  const [y, mo, d] = startDateISO.split('-').map(Number);
+  const dt = new Date(y, mo - 1, d + offset, hr, mn);
+  return dt.getTime();
+}
+
+// Build search + time-slot indices for each loaded tab
+function buildAllSearchIndices() {
+  for (let i = 0; i < tabs.length; i++) {
+    const t = tabs[i];
+    if (!t.tableHtml) { t.searchIndex = []; t.timeSlots = []; continue; }
+    // Build a detached DOM to walk
+    const tmp = document.createElement('div');
+    tmp.innerHTML = '<div class="ritz">' + t.tableHtml + '</div>';
+    const grid = buildGrid(tmp);
+    t.timeSlots = detectTimeSlots(grid);
+    const idx = [];
+    for (let r = 0; r < grid.length; r++) {
+      for (let c = 0; c < grid[r].length; c++) {
+        const text = grid[r][c].textContent.replace(/\s+/g, ' ').trim();
+        if (!text) continue;
+        if (TEAM_RX.test(text)) {
+          const slot = timeSlotForCell(t.timeSlots, r, c);
+          idx.push({
+            r, c, text,
+            slotLabel: slot,
+            slotMs: slotToMillis(slot, tournament.start_date),
+          });
+        }
+      }
+    }
+    t.searchIndex = idx;
+  }
+}
+
+// ───────────────────────────────────────── search
+function wireSearch() {
+  $('q').addEventListener('input', onSearch);
+  $('prevBtn').addEventListener('click', () => navigate(-1));
+  $('nextBtn').addEventListener('click', () => navigate(+1));
+}
+function wireKeyboard() {
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') {
+      if (e.key === 'Enter') { e.preventDefault(); navigate(+1); }
+      if (e.key === 'Escape') { $('q').value = ''; onSearch(); $('q').blur(); }
+      return;
+    }
+    if (e.key === 'F3' || (e.ctrlKey && e.key.toLowerCase() === 'f')) {
+      e.preventDefault();
+      $('q').focus();
+    }
+  });
+}
+
+function onSearch() {
+  const q = $('q').value.trim().toLowerCase();
+  if (!q) {
+    searchResults = [];
+    searchIdx = 0;
+    clearHighlights();
+    updateSearchUI();
+    return;
+  }
+  const all = [];
+  tabs.forEach((t, ti) => {
+    for (const e of (t.searchIndex || [])) {
+      if (e.text.toLowerCase().includes(q)) {
+        all.push({ tabIdx: ti, ri: e.r, ci: e.c, text: e.text, slotMs: e.slotMs, slotLabel: e.slotLabel });
+      }
+    }
+  });
+  // Sort: latest match ≤ now first; if all are future, latest future first.
+  const now = Date.now();
+  all.sort((a, b) => {
+    const am = a.slotMs ?? -Infinity;
+    const bm = b.slotMs ?? -Infinity;
+    const aPast = am <= now, bPast = bm <= now;
+    if (aPast && bPast) return bm - am;            // both past: most recent first
+    if (!aPast && !bPast) return am - bm;          // both future: soonest first
+    return aPast ? -1 : 1;                         // past beats future
+  });
+  searchResults = all;
+  searchIdx = 0;
+  if (all.length) navigate(0);
+  else { clearHighlights(); updateSearchUI(); }
+}
+
+function navigate(deltaOrZero) {
+  if (!searchResults.length) return;
+  if (deltaOrZero !== 0) {
+    searchIdx = (searchIdx + deltaOrZero + searchResults.length) % searchResults.length;
+  }
+  const r = searchResults[searchIdx];
+  if (r.tabIdx !== activeTabIdx) {
+    activeTabIdx = r.tabIdx;
+    renderTabBar();
+    renderActiveBracket();
+  }
+  applyHighlights();
+  updateSearchUI();
+
+  // Scroll-into-view for the current cell
+  const grid = buildGrid($('bracket'));
+  const cell = grid[r.ri]?.[r.ci];
+  if (cell) {
+    // Defer to after layout settles
+    requestAnimationFrame(() => {
+      cell.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    });
+  }
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.search-hit, .search-hit-current').forEach(el => {
+    el.classList.remove('search-hit', 'search-hit-current');
+  });
+}
+
+function applyHighlights() {
+  clearHighlights();
+  if (!searchResults.length) return;
+  const grid = buildGrid($('bracket'));
+  searchResults.forEach((r, i) => {
+    if (r.tabIdx !== activeTabIdx) return;
+    const cell = grid[r.ri]?.[r.ci];
+    if (!cell) return;
+    cell.classList.add(i === searchIdx ? 'search-hit-current' : 'search-hit');
+  });
+}
+
+function updateSearchUI() {
+  const has = searchResults.length > 0;
+  $('prevBtn').disabled = !has;
+  $('nextBtn').disabled = !has;
+  if (!has) {
+    $('searchMeta').textContent = $('q').value ? 'No matches' : '';
+    return;
+  }
+  const r = searchResults[searchIdx];
+  const tabName = tabs[r.tabIdx].name;
+  const slot = r.slotLabel ? ` · ${r.slotLabel}` : '';
+  $('searchMeta').textContent = `${searchIdx + 1}/${searchResults.length} · ${tabName}${slot}`;
+}
+
+// ───────────────────────────────────────── polling
+async function pollForChanges() {
+  let anyChange = false;
+  for (const t of tabs) {
+    try {
+      const data = await fetchAndExtract(t.pageUrl);
+      const newHash = await hashStr(data.table);
+      if (newHash && newHash !== t.tableHash) {
+        t.tableHtml = data.table;
+        t.styleCss = data.style;
+        t.tableHash = newHash;
+        anyChange = true;
+        if (tabs.indexOf(t) === activeTabIdx) renderActiveBracket();
+      }
+    } catch (e) { /* silent on poll failure */ }
+  }
+  if (anyChange) {
+    buildAllSearchIndices();
+    if (searchResults.length) onSearch(); // re-run with fresh index
+    if (activeTabIdx >= 0 && tabs[activeTabIdx]?.tableHtml) applyHighlights();
+    showToast('Updated');
+  }
+}
+
+function showToast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+// ───────────────────────────────────────── helpers
+function fmtDateRange(start, end) {
+  if (!start) return '';
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = (end || start).split('-').map(Number);
+  const startUTC = new Date(Date.UTC(sy, sm-1, sd));
+  const endUTC   = new Date(Date.UTC(ey, em-1, ed));
+  const sameYear  = sy === ey;
+  const sameMonth = sameYear && sm === em;
+  const startStr = startUTC.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const endStr   = endUTC.toLocaleDateString(undefined,   sameMonth
+    ? { day: 'numeric', timeZone: 'UTC' }
+    : { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  if (start === end) return startStr + ', ' + ey;
+  return sameYear ? `${startStr}–${endStr}, ${ey}` : `${startStr}, ${sy} – ${endStr}, ${ey}`;
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

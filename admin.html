@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<!--
+  Brackets Admin v0.1
+  ============================================================================
+  Manages the catalog of tournaments displayed on the public landing page.
+  Each tournament points at a published Google Sheet workbook URL; the public
+  viewer auto-discovers every tab whose name ends in "Bracket" and renders
+  them as switchable sub-tabs.
+
+  Auth:    service_role JWT in ?key= URL param. Same gate pattern as Slate.
+  Backend: Supabase project spm-apa (dqzbekoaysgaiqljueac), schema 'bracket'.
+  Tables:  bracket.tournaments, bracket.app_meta
+  ============================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brackets Admin</title>
+<style>
+  :root {
+    --spm-primary: #ea002a;
+    --spm-accent:  #0031a1;
+    --primary: var(--spm-primary);
+    --accent:  var(--spm-accent);
+    --gold:     #d4a017;
+    --gold-light: #ffd54f;
+    --bg:      #f5f5f5;
+    --surface: #ffffff;
+    --text:    #1f1f1f;
+    --muted:   #666;
+    --border:  #e1e1e1;
+    --danger:  #c8102e;
+    --success: #0a8754;
+    --warn-bg: #fff8e1;
+    --warn-fg: #6a4a00;
+    --warn-border: #d09a2c;
+    --shadow-1: 0 3px 10px rgba(0,0,0,.10);
+    --shadow-2: 0 6px 22px rgba(0,0,0,.16);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    font-size: 16px;
+  }
+  header {
+    background: linear-gradient(135deg, var(--spm-primary), var(--spm-accent));
+    color: white;
+    padding: 18px 22px;
+    box-shadow: var(--shadow-1);
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 {
+    margin: 0;
+    font-size: clamp(1.0625rem, 0.95rem + 0.5vw, 1.25rem);
+    font-weight: 900;
+    letter-spacing: -0.01em;
+  }
+  header h1 .accent {
+    color: var(--gold-light);
+    font-style: italic;
+    font-weight: 700;
+  }
+  header .right { display: flex; gap: 8px; align-items: center; font-size: 0.875rem; }
+  header a { color: rgba(255,255,255,0.92); text-decoration: none; font-weight: 600; }
+  header a:hover { color: white; }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 22px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow-1);
+  }
+  .card h2 {
+    margin: 0 0 12px;
+    font-size: 1rem;
+    color: var(--accent);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* Form fields */
+  .row { display: grid; gap: 12px; margin-bottom: 12px; }
+  .row.cols-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 600px) { .row.cols-2 { grid-template-columns: 1fr; } }
+  label {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+  }
+  input, textarea, select {
+    width: 100%;
+    font: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    min-height: 48px;
+    transition: border-color 120ms;
+  }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0,49,161,0.15);
+  }
+  input[type="date"] { padding: 10px 14px; }
+  textarea { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 0.875rem; resize: vertical; min-height: 80px; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    border: 0; border-radius: 8px;
+    padding: 12px 20px; min-height: 48px;
+    font: inherit; font-weight: 600; font-size: 0.9375rem;
+    cursor: pointer;
+    transition: filter 120ms, transform 60ms;
+    text-decoration: none;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-primary { background: var(--primary); color: white; }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.05); }
+  .btn-secondary { background: var(--surface); color: var(--accent); border: 1px solid var(--accent); }
+  .btn-danger { background: var(--surface); color: var(--danger); border: 1px solid var(--danger); }
+  .btn-danger:hover:not(:disabled) { background: var(--danger); color: white; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Tournament list */
+  .empty {
+    color: var(--muted);
+    text-align: center;
+    padding: 32px 16px;
+    font-style: italic;
+  }
+  .tournament {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px 20px;
+    margin-bottom: 12px;
+    box-shadow: var(--shadow-1);
+    transition: box-shadow 140ms;
+  }
+  .tournament:hover { box-shadow: var(--shadow-2); }
+  .tournament .head {
+    display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .tournament .name {
+    font-weight: 600; font-size: 1.0625rem; color: var(--text);
+    flex: 1; min-width: 200px;
+  }
+  .tournament .meta { color: var(--muted); font-size: 0.875rem; }
+  .tournament .url {
+    font-family: ui-monospace, monospace; font-size: 0.8125rem;
+    color: var(--muted);
+    word-break: break-all;
+  }
+  .tournament.editing { border-color: var(--accent); box-shadow: var(--shadow-2); }
+  .pub-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .pub-status.ok    { background: #d4edda; color: #1d643b; }
+  .pub-status.empty { background: #fdebd0; color: #9a6700; }
+
+  /* Status banner */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #1a1a1a; color: white;
+    padding: 12px 20px; border-radius: 999px;
+    font-size: 0.9375rem;
+    box-shadow: var(--shadow-2);
+    opacity: 0; transition: opacity 200ms;
+    pointer-events: none;
+    z-index: 100;
+  }
+  #toast.show { opacity: 1; }
+  #toast.error { background: var(--danger); }
+
+  /* Key gate */
+  #keyGate {
+    position: fixed; inset: 0; background: rgba(244,245,247,0.97);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 50; padding: 20px;
+  }
+  #keyGate .gate-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 32px; max-width: 480px; width: 100%;
+    box-shadow: var(--shadow-2);
+  }
+  #keyGate h2 { margin: 0 0 8px; color: var(--accent); }
+  #keyGate p { color: var(--muted); margin: 0 0 8px; }
+  .hidden { display: none !important; }
+
+  .admin-url-block {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-fg);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-size: 0.875rem;
+  }
+  .admin-url-block strong { display: block; margin-bottom: 4px; }
+  .admin-url-block code {
+    font-family: ui-monospace, monospace; font-size: 0.8125rem;
+    background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+
+<div id="keyGate">
+  <div class="gate-card">
+    <h2 id="keyGateTitle">Admin key required</h2>
+    <p id="keyGateMsg">This page is protected. Add <code>?key=…</code> to the URL.</p>
+  </div>
+</div>
+
+<header class="hidden" id="appBar">
+  <h1>Brackets <span class="accent">Admin</span></h1>
+  <div class="right"><a href="index.html">View site →</a></div>
+</header>
+
+<main class="hidden" id="appMain">
+  <div class="admin-url-block" id="adminUrlBlock">
+    <strong>Bookmark this admin URL</strong>
+    <code id="adminUrl"></code>
+  </div>
+
+  <section class="card">
+    <h2 id="formTitle">Add tournament</h2>
+    <div class="row cols-2">
+      <div>
+        <label for="f-name">Name</label>
+        <input id="f-name" type="text" autocomplete="off" placeholder="e.g. Spring 2026 9-Ball Tri-Annuals">
+      </div>
+      <div>
+        <label for="f-order">Display order</label>
+        <input id="f-order" type="number" step="1" placeholder="10" min="0">
+      </div>
+    </div>
+    <div class="row cols-2">
+      <div>
+        <label for="f-start">Start date</label>
+        <input id="f-start" type="date">
+      </div>
+      <div>
+        <label for="f-end">End date</label>
+        <input id="f-end" type="date">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="f-url">Published Google Sheet workbook URL <span style="font-weight:400;color:var(--muted);text-transform:none">(optional — fill in after publishing)</span></label>
+        <textarea id="f-url" rows="2" placeholder="https://docs.google.com/spreadsheets/d/e/2PACX-…/pubhtml"></textarea>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="saveBtn">Save tournament</button>
+      <button class="btn btn-secondary hidden" id="cancelEditBtn">Cancel</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Tournaments</h2>
+    <div id="list"></div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const APP_VERSION = '0.1';
+const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
+const SB_SCHEMA = 'bracket';
+const params = new URLSearchParams(location.search);
+const SB_KEY = params.get('key') || '';
+const HEADERS_READ = SB_KEY
+  ? { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Accept-Profile': SB_SCHEMA }
+  : { 'Accept-Profile': SB_SCHEMA };
+const HEADERS_WRITE = {
+  ...HEADERS_READ,
+  'Content-Type': 'application/json',
+  'Content-Profile': SB_SCHEMA,
+  Prefer: 'return=representation'
+};
+
+const $ = (id) => document.getElementById(id);
+let editingId = null;
+
+function toast(msg, kind = '') {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'show' + (kind ? ' ' + kind : '');
+  setTimeout(() => { t.className = ''; }, 2400);
+}
+function fmtDate(s) {
+  if (!s) return '';
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC'
+  });
+}
+function fmtDateRange(start, end) {
+  if (!start) return '';
+  if (!end || start === end) return fmtDate(start);
+  const [sy, sm] = start.split('-').map(Number);
+  const [ey, em] = end.split('-').map(Number);
+  const showYearOnEnd = sy !== ey;
+  const showMonthOnEnd = sy !== ey || sm !== em;
+  const startOpts = { month: 'short', day: 'numeric' };
+  const endOpts   = { day: 'numeric' };
+  if (showMonthOnEnd) endOpts.month = 'short';
+  if (showYearOnEnd)  endOpts.year = 'numeric';
+  const [, , sd] = start.split('-').map(Number);
+  const [, , ed] = end.split('-').map(Number);
+  const startStr = new Date(Date.UTC(sy, sm-1, sd)).toLocaleDateString(undefined, { ...startOpts, timeZone: 'UTC' });
+  const endStr   = new Date(Date.UTC(ey, em-1, ed)).toLocaleDateString(undefined, { ...endOpts, timeZone: 'UTC' });
+  const yearSuffix = showYearOnEnd ? '' : ', ' + ey;
+  return `${startStr}–${endStr}${yearSuffix}`;
+}
+function escapeHTML(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: { ...HEADERS_WRITE } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(SB_URL + path, opts);
+  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + (await r.text()));
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+async function loadTournaments() {
+  const list = await api('GET', '/rest/v1/tournaments?select=*&order=display_order.asc,start_date.asc');
+  render(list);
+}
+
+function render(list) {
+  const el = $('list');
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">No tournaments yet. Add one above.</div>';
+    return;
+  }
+  el.innerHTML = list.map(t => `
+    <div class="tournament" data-id="${t.id}">
+      <div class="head">
+        <div>
+          <div class="name">${escapeHTML(t.name)}</div>
+          <div class="meta">${escapeHTML(fmtDateRange(t.start_date, t.end_date))} · order ${t.display_order}</div>
+        </div>
+        <span class="pub-status ${t.workbook_pub_url ? 'ok' : 'empty'}">${t.workbook_pub_url ? 'Published' : 'No URL yet'}</span>
+      </div>
+      ${t.workbook_pub_url ? `<div class="url">${escapeHTML(t.workbook_pub_url)}</div>` : ''}
+      <div class="actions" style="margin-top:12px">
+        <button class="btn btn-secondary" data-action="edit"   data-id="${t.id}">Edit</button>
+        <button class="btn btn-danger"    data-action="delete" data-id="${t.id}">Delete</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function readForm() {
+  return {
+    name: $('f-name').value.trim(),
+    start_date: $('f-start').value,
+    end_date: $('f-end').value,
+    workbook_pub_url: $('f-url').value.trim() || null,
+    display_order: parseInt($('f-order').value, 10) || 0,
+  };
+}
+function writeForm(t) {
+  $('f-name').value = t?.name || '';
+  $('f-start').value = t?.start_date || '';
+  $('f-end').value = t?.end_date || '';
+  $('f-url').value = t?.workbook_pub_url || '';
+  $('f-order').value = t?.display_order ?? '';
+}
+function startEdit(t) {
+  editingId = t.id;
+  $('formTitle').textContent = 'Edit tournament';
+  $('saveBtn').textContent = 'Save changes';
+  $('cancelEditBtn').classList.remove('hidden');
+  writeForm(t);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function cancelEdit() {
+  editingId = null;
+  $('formTitle').textContent = 'Add tournament';
+  $('saveBtn').textContent = 'Save tournament';
+  $('cancelEditBtn').classList.add('hidden');
+  writeForm(null);
+}
+
+async function onSave() {
+  const data = readForm();
+  if (!data.name) { toast('Name is required', 'error'); return; }
+  if (!data.start_date || !data.end_date) { toast('Start and end dates required', 'error'); return; }
+  if (data.end_date < data.start_date) { toast('End date must be ≥ start date', 'error'); return; }
+  if (data.workbook_pub_url && !/docs\.google\.com\/spreadsheets/.test(data.workbook_pub_url)) {
+    toast('URL doesn\'t look like a Google Sheets URL', 'error'); return;
+  }
+  $('saveBtn').disabled = true;
+  try {
+    if (editingId) {
+      await api('PATCH', '/rest/v1/tournaments?id=eq.' + editingId, data);
+      toast('Saved');
+    } else {
+      await api('POST', '/rest/v1/tournaments', data);
+      toast('Added');
+    }
+    cancelEdit();
+    await loadTournaments();
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  } finally {
+    $('saveBtn').disabled = false;
+  }
+}
+
+async function onDelete(id) {
+  if (!confirm('Delete this tournament? This cannot be undone.')) return;
+  try {
+    await api('DELETE', '/rest/v1/tournaments?id=eq.' + id);
+    toast('Deleted');
+    if (editingId === id) cancelEdit();
+    await loadTournaments();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
+async function init() {
+  if (!SB_KEY) { return; }
+  // Validate key by trying to read tournaments (write-protected, anon can read).
+  // Better validation: try a service-role-only operation. We'll attempt a HEAD on app_meta.
+  try {
+    const r = await fetch(SB_URL + '/rest/v1/app_meta?select=key&limit=1', { headers: HEADERS_READ });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+  } catch {
+    $('keyGateTitle').textContent = 'Access Denied';
+    $('keyGateMsg').innerHTML = '<strong style="color:var(--danger)">Admin key invalid or expired.</strong><br>Double-check <code>?key=</code>.';
+    return;
+  }
+  // Unlock UI
+  $('keyGate').classList.add('hidden');
+  $('appBar').classList.remove('hidden');
+  $('appMain').classList.remove('hidden');
+
+  // Display admin URL for safekeeping
+  $('adminUrl').textContent = location.href;
+
+  // Wire form actions
+  $('saveBtn').addEventListener('click', onSave);
+  $('cancelEditBtn').addEventListener('click', cancelEdit);
+
+  // Delegate row actions
+  $('list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const id = +btn.dataset.id;
+    const action = btn.dataset.action;
+    if (action === 'delete') return onDelete(id);
+    if (action === 'edit') {
+      const list = await api('GET', '/rest/v1/tournaments?id=eq.' + id);
+      if (list[0]) startEdit(list[0]);
+    }
+  });
+
+  await loadTournaments();
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

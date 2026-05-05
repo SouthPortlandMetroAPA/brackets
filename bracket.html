@@ -42,6 +42,9 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
+  /* When scrollIntoView scrolls a search-result cell into view, leave room
+     at the top so the cell isn't hidden behind the fixed chrome. */
+  html { scroll-padding-top: 180px; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
     color: var(--text);
@@ -304,7 +307,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.6';
+const APP_VERSION = '0.7';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
@@ -830,10 +833,41 @@ function pollForDeploy(targetVersion) {
   }, 3000);
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+   PINCH-ZOOM COMPENSATION — keep the top chrome (header + tabs + search)
+   at a constant visual size regardless of how far the user has pinched
+   the bracket. Without this, zooming in to read team names also zooms
+   the chrome, shrinking the search bar to unusable size.
+
+   Mechanism: the Visual Viewport API exposes the user's current pinch
+   scale and pan position. We counter-scale the chrome by 1/scale and
+   translate it to track the visual viewport's top-left, so it visually
+   stays the same size and stays at the top of what the user sees.
+   ────────────────────────────────────────────────────────────────────── */
+function setupPinchCompensation() {
+  const vv = window.visualViewport;
+  if (!vv) return; // Older browsers — chrome will scale with page, acceptable fallback
+  const chrome = document.querySelector('.chrome');
+  if (!chrome) return;
+  function update() {
+    const scale = vv.scale || 1;
+    chrome.style.transformOrigin = 'top left';
+    chrome.style.transform =
+      `translate(${vv.offsetLeft}px, ${vv.offsetTop}px) scale(${1 / scale})`;
+    // Keep chrome the width of the visual viewport so it spans the screen
+    // even at high zoom levels (where layout viewport >> visual viewport).
+    chrome.style.width = (vv.width * scale) + 'px';
+  }
+  vv.addEventListener('resize', update);
+  vv.addEventListener('scroll', update);
+  update();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   init();
   checkVersion();
   setInterval(checkVersion, 30000);
+  setupPinchCompensation();
 });
 </script>
 </body>

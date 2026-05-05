@@ -307,7 +307,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.7';
+const APP_VERSION = '0.8';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
@@ -659,22 +659,20 @@ function onSearch() {
     return aPast ? -1 : 1;                         // past beats future
   });
   searchResults = all;
-  // -1 sentinel = "no result is current yet". The first call to navigate()
-  // resolves it to 0 (or last when going backwards). This way the first
-  // press of Enter / Next lands on hit #1 instead of skipping it.
-  searchIdx = -1;
-  // While the user is *typing*, don't scroll the page — that snatches the
-  // search bar away from underneath their finger on mobile (especially
-  // with the keyboard open and `scrollIntoView({block:'center'})` moving
-  // the viewport vertically). Just highlight matches in the active tab
-  // and update the prev/next counter. The user explicitly navigates
-  // (Enter or the arrow buttons) when they're ready to be panned to a hit.
+  searchIdx = 0;
+  // Auto-pan to the first result as the user types. Two pieces in place
+  // make this safe on mobile now:
+  //   · scroll-padding-top: 180px on :root → scrollIntoView reserves the
+  //     chrome height, so the cell lands below the search bar
+  //   · Visual Viewport API compensation → the chrome stays anchored at
+  //     the visual viewport top through the scroll, so the search bar
+  //     never gets yanked off-screen
   if (all.length) {
-    applyHighlights();
+    navigate(0);
   } else {
     clearHighlights();
+    updateSearchUI();
   }
-  updateSearchUI();
 }
 
 function navigate(deltaOrZero) {

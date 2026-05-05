@@ -185,13 +185,30 @@
   .ritz {
     display: inline-block;
     min-width: 100%;
+    /* Force a uniform white background so empty/transparent cells don't
+       leak through to the body's gray. Cells with explicit colors
+       (yellow time slots, red prize amounts, blue advance/qualified
+       boxes) paint over this. */
+    background: white;
   }
-  .ritz .waffle { border-collapse: collapse; }
+  .ritz .waffle {
+    border-collapse: collapse;
+    background: white;
+  }
   .ritz .waffle td, .ritz .waffle th { padding: 0 3px; vertical-align: bottom; }
   /* Hide Google's spreadsheet row-number column and the empty thead row.
      Column widths are preserved by a <colgroup> we generate at render time. */
   .ritz .waffle thead { display: none; }
   .ritz .waffle tbody tr > th { display: none; }
+  /* Make the bracket container itself sit on white (instead of the
+     body's gray) so margins around the table read as paper, not gaps. */
+  #bracket {
+    background: white;
+    padding: 12px 16px 24px;
+    border-radius: 12px;
+    box-shadow: var(--shadow-1);
+    margin: 0 12px;
+  }
 
   /* Search highlights */
   .ritz .waffle td.search-hit,
@@ -287,7 +304,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.3';
+const APP_VERSION = '0.4';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };

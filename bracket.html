@@ -188,10 +188,10 @@
   }
   .ritz .waffle { border-collapse: collapse; }
   .ritz .waffle td, .ritz .waffle th { padding: 0 3px; vertical-align: bottom; }
-  .ritz .waffle .row-headers-background {
-    background: #f0f0f0; color: #999; padding: 0 5px;
-    font-size: 0.7rem; text-align: right;
-  }
+  /* Hide Google's spreadsheet row-number column and the empty thead row.
+     Column widths are preserved by a <colgroup> we generate at render time. */
+  .ritz .waffle thead { display: none; }
+  .ritz .waffle tbody tr > th { display: none; }
 
   /* Search highlights */
   .ritz .waffle td.search-hit,
@@ -287,7 +287,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.1';
+const APP_VERSION = '0.2';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const HEADERS = { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'bracket' };
@@ -448,6 +448,28 @@ function renderActiveBracket() {
     return;
   }
   wrap.innerHTML = '<div class="ritz">' + tab.tableHtml + '</div>';
+  applyColumnWidths(wrap.querySelector('table.waffle'));
+}
+
+/* Convert thead's <th style="width:Npx"> entries into a <colgroup> so we
+   can hide the thead (which is just empty placeholders) without losing
+   column widths. Skip the first <th> — that's the row-number column,
+   which we hide entirely along with each tbody row's leading <th>. */
+function applyColumnWidths(table) {
+  if (!table) return;
+  if (table.querySelector(':scope > colgroup')) return; // already applied
+  const headTr = table.querySelector(':scope > thead > tr');
+  if (!headTr) return;
+  const ths = headTr.querySelectorAll(':scope > th');
+  if (ths.length < 2) return;
+  const colgroup = document.createElement('colgroup');
+  ths.forEach((th, i) => {
+    if (i === 0) return; // skip row-header column
+    const col = document.createElement('col');
+    if (th.style.width) col.style.width = th.style.width;
+    colgroup.appendChild(col);
+  });
+  table.insertBefore(colgroup, table.firstChild);
 }
 
 // ───────────────────────────────────────── grid + indices

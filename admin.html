@@ -227,6 +227,31 @@
     background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 4px;
     word-break: break-all;
   }
+
+  /* Auto-update overlay (blocks UI while a new build propagates) */
+  .update-overlay {
+    position: fixed; inset: 0;
+    background: rgba(10,20,40,0.72);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 9999; padding: 24px;
+  }
+  .update-overlay.shown { display: flex; }
+  .update-box {
+    background: #fff; border-radius: 22px;
+    padding: 36px 32px; max-width: 420px; width: 100%;
+    text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+  .update-spinner {
+    width: 56px; height: 56px; margin: 0 auto 18px;
+    border-radius: 50%;
+    border: 5px solid rgba(0,49,161,0.15);
+    border-top-color: var(--spm-accent);
+    animation: update-spin 0.85s linear infinite;
+  }
+  @keyframes update-spin { to { transform: rotate(360deg); } }
+  .update-title { font-size: 1.25rem; font-weight: 800; color: var(--spm-accent); }
+  .update-sub { font-size: 0.9rem; color: var(--muted); margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -291,10 +316,20 @@
 
 <div id="toast"></div>
 
+<div id="updateOverlay" class="update-overlay">
+  <div class="update-box">
+    <div class="update-spinner" aria-hidden="true"></div>
+    <div class="update-title">Updating Brackets</div>
+    <div class="update-sub">A new version is being deployed. This tab will reload automatically&hellip;</div>
+  </div>
+</div>
+
 <script>
+const APP_NAME = 'Brackets';
 const APP_VERSION = '0.1';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const SB_SCHEMA = 'bracket';
+const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
 const params = new URLSearchParams(location.search);
 const SB_KEY = params.get('key') || '';
 const HEADERS_READ = SB_KEY
@@ -453,7 +488,48 @@ async function onDelete(id) {
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+   AUTO-UPDATE (see same block in index.html / bracket.html for docs)
+   ────────────────────────────────────────────────────────────────────── */
+let _versionMismatch = false;
+async function checkVersion() {
+  if (_versionMismatch) return;
+  try {
+    const r = await fetch(SB_URL + '/rest/v1/apps?app_name=eq.' + encodeURIComponent(APP_NAME) + '&select=version', {
+      headers: { apikey: ANON_KEY, Authorization: 'Bearer ' + ANON_KEY, 'Accept-Profile': 'apa_core' }
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    const remote = data && data[0] && data[0].version;
+    if (remote && remote !== APP_VERSION) {
+      _versionMismatch = true;
+      document.getElementById('updateOverlay').classList.add('shown');
+      pollForDeploy(remote);
+    }
+  } catch (_) {}
+}
+function pollForDeploy(targetVersion) {
+  setTimeout(async () => {
+    try {
+      const me = location.pathname.split('/').pop() || 'admin.html';
+      const resp = await fetch(me + '?_=' + Date.now());
+      if (resp.ok) {
+        const html = await resp.text();
+        if (html.indexOf("APP_VERSION = '" + targetVersion + "'") !== -1) {
+          location.reload(true);
+          return;
+        }
+      }
+    } catch (_) {}
+    pollForDeploy(targetVersion);
+  }, 3000);
+}
+
 async function init() {
+  // Version check runs regardless of admin key validity
+  checkVersion();
+  setInterval(checkVersion, 30000);
+
   if (!SB_KEY) { return; }
   // Validate key by trying to read tournaments (write-protected, anon can read).
   // Better validation: try a service-role-only operation. We'll attempt a HEAD on app_meta.

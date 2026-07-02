@@ -328,7 +328,7 @@
 
 <script>
 const APP_NAME = 'Brackets';
-const APP_VERSION = '0.8';
+const APP_VERSION = '0.81';
 const SB_URL  = 'https://dqzbekoaysgaiqljueac.supabase.co';
 const SB_SCHEMA = 'bracket';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxemJla29heXNnYWlxbGp1ZWFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNzA5NzgsImV4cCI6MjA5MDc0Njk3OH0.cCdGxZ4zEFzU_r6lWSDeoNWG67Q4MSYCAtpds035dfU';
@@ -504,26 +504,46 @@ async function checkVersion() {
     const data = await r.json();
     const remote = data && data[0] && data[0].version;
     if (remote && remote !== APP_VERSION) {
+        /* 2026-07-02 hardening: remote OLDER than running = deploy window
+           or DB rollback — do not strand the tab in the overlay. */
+        var __r = parseFloat(remote), __l = parseFloat(APP_VERSION);
+        if (isFinite(__r) && isFinite(__l) && __r < __l) return;
       _versionMismatch = true;
       document.getElementById('updateOverlay').classList.add('shown');
       pollForDeploy(remote);
     }
   } catch (_) {}
 }
-function pollForDeploy(targetVersion) {
+function pollForDeploy(targetVersion, attempt) {
+  attempt = attempt || 0;
+  /* 2026-07-02 hardening: give-up cap — if Pages serves nothing new after
+     ~2 min the deploy is wedged; dismiss the overlay and let the 30s
+     checkVersion cycle retry in the background. */
+  if (attempt >= 40) {
+    console.warn('[updater] deploy not served after ~2min — dismissing overlay, retrying in background');
+    var __ov = document.getElementById('updateOverlay');
+    if (__ov) __ov.classList.remove('shown');
+    _versionMismatch = false;
+    return;
+  }
   setTimeout(async () => {
     try {
       const me = location.pathname.split('/').pop() || 'admin.html';
       const resp = await fetch(me + '?_=' + Date.now());
       if (resp.ok) {
         const html = await resp.text();
-        if (html.indexOf("APP_VERSION = '" + targetVersion + "'") !== -1) {
+        var __m = html && html.match(/APP_VERSION\s*=\s*'([0-9.]+)'/);
+        var __served = __m && __m[1];
+        /* 2026-07-02 hardening: reload on ANY served version different from
+           the running one — pinning the target strands the tab when a second
+           bump lands mid-poll. */
+        if (__served && __served !== APP_VERSION) {
           location.reload(true);
           return;
         }
       }
     } catch (_) {}
-    pollForDeploy(targetVersion);
+    pollForDeploy(targetVersion, attempt + 1);
   }, 3000);
 }
 
